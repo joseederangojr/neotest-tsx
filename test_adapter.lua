@@ -1,7 +1,6 @@
-" Neovim test script for neotest-tsx adapter
-" Run with: nvim -c "source test_adapter.vim"
+-- Neovim test script for neotest-tsx adapter
+-- Run with: nvim -c "source test_adapter.vim"
 
-lua << EOF
 print("Testing neotest-tsx adapter...")
 print("================================")
 
@@ -16,9 +15,6 @@ if not ok then
 end
 
 print("✓ Adapter loaded successfully")
-
--- Check for plenary async
-local async_available, async = pcall(require, "plenary.async")
 
 -- Test 1: Check if adapter has required fields
 print("\n1. Testing adapter structure:")
@@ -78,34 +74,27 @@ end
 
 -- Test 5: Test position discovery (if treesitter is available)
 print("\n5. Testing position discovery:")
-if async_available then
-    async.run(function()
-        local test_file = vim.fn.getcwd() .. "/tests/basic.test.ts"
-        if vim.fn.filereadable(test_file) == 1 then
-            local success, positions = pcall(adapter.discover_positions, test_file)
-            if success and positions then
-                print("   ✓ Position discovery successful")
-                -- Count positions
-                local count = 0
-                local function count_positions(tree)
-                    count = count + 1
-                    for _, child in ipairs(tree:children() or {}) do
-                        count_positions(child)
-                    end
-                end
-                count_positions(positions)
-                print(string.format("   - Found %d test positions", count))
-            else
-                print("   ✗ Position discovery failed:", positions)
+local test_file = vim.fn.getcwd() .. "/tests/basic.test.ts"
+if vim.fn.filereadable(test_file) == 1 then
+    local success, positions = pcall(adapter.discover_positions, test_file)
+    if success and positions then
+        print("   ✓ Position discovery successful")
+        -- Count positions
+        local count = 0
+        local function count_positions(tree)
+            count = count + 1
+            for _, child in ipairs(tree:children() or {}) do
+                count_positions(child)
             end
-        else
-            print("   ⚠ Test file not found, skipping position discovery test")
         end
-    end)
+        count_positions(positions)
+        print(string.format("   - Found %d test positions", count))
+    else
+        print("   ✗ Position discovery failed:", positions)
+    end
 else
-    print("   ⚠ Plenary async not available, skipping position discovery test")
+    print("   ⚠ Test file not found, skipping position discovery test")
 end
 
 print("\n================================")
 print("Adapter test completed!")
-EOF

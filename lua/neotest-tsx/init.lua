@@ -3,128 +3,23 @@ local async = require("neotest.async")
 local lib = require("neotest.lib")
 local logger = require("neotest.logging")
 local util = require("neotest-tsx.util")
+local tsx_util = require("neotest-tsx.tsx-util")
+local parameterized_tests = require("neotest-tsx.parameterized-tests")
 
 ---@class neotest.TsxOptions
----@field tsxCommand? string|fun(): string
+---@field command? string|fun(): string
 ---@field env? table<string, string>|fun(): table<string, string>
 ---@field cwd? string|fun(): string
----@field filter_dir? fun(name: string, relpath: string, root: string): boolean
----@field is_test_file? fun(file_path: string): boolean
+---@field strategy_config? table<string, unknown>|fun(): table<string, unknown>
 
----@class neotest.Adapter
+---@type neotest.Adapter
 local adapter = { name = "neotest-tsx" }
-
----@param packageJsonContent string
----@return boolean
-local function hasTsxDependencyInJson(packageJsonContent)
-  local parsedPackageJson = vim.json.decode(packageJsonContent)
-
-  for _, dependencyType in ipairs({ "dependencies", "devDependencies" }) do
-    if parsedPackageJson[dependencyType] then
-      for key, _ in pairs(parsedPackageJson[dependencyType]) do
-        if key == "tsx" then
-          return true
-        end
-      end
-    end
-  end
-
-  return false
-end
-
----@param packageJsonContent string
----@return boolean
-local function hasTsxTestScriptInJson(packageJsonContent)
-  local parsedPackageJson = vim.json.decode(packageJsonContent)
-
-  if parsedPackageJson.scripts then
-    for scriptName, scriptCommand in pairs(parsedPackageJson.scripts) do
-      if scriptCommand:find("tsx%s+--test") then
-        return true
-      end
-    end
-  end
-
-  return false
-end
-
----@return boolean
-local function hasRootProjectTsxDependency()
-  local rootPackageJson = vim.loop.cwd() .. "/package.json"
-
-  local success, packageJsonContent = pcall(lib.files.read, rootPackageJson)
-  if not success then
-    print("cannot read package.json, got " .. rootPackageJson)
-    return false
-  end
-
-  return hasTsxDependencyInJson(packageJsonContent)
-end
-
----@return boolean
-local function hasRootProjectTsxTestScript()
-  local rootPackageJson = vim.loop.cwd() .. "/package.json"
-
-  local success, packageJsonContent = pcall(lib.files.read, rootPackageJson)
-  if not success then
-    print("cannot read package.json, got " .. rootPackageJson)
-    return false
-  end
-
-  return hasTsxTestScriptInJson(packageJsonContent)
-end
-
----@param path string
----@return boolean
-local function hasTsxTestSetup(path)
-  local rootPath = lib.files.match_root_pattern("package.json")(path)
-
-  if not rootPath then
-    return false
-  end
-
-  local success, packageJsonContent = pcall(lib.files.read, rootPath .. "/package.json")
-  if not success then
-    print("cannot read package.json")
-    return false
-  end
-
-  local gitRootPath = util.find_git_ancestor(path)
-  local hasRootMonorepoTsxTestSetup = false
-
-  -- only check the git root's package.json if it's different (e.g. in monorepos)
-  if gitRootPath and rootPath ~= gitRootPath then
-    local monorepoSuccess, monorepoRootPackageJsonContent =
-      pcall(lib.files.read, gitRootPath .. "/package.json")
-    if monorepoSuccess then
-      hasRootMonorepoTsxTestSetup = hasTsxTestScriptInJson(monorepoRootPackageJsonContent)
-    end
-  end
-
-  return hasTsxTestScriptInJson(packageJsonContent)
-    or hasRootProjectTsxTestScript()
-    or hasRootMonorepoTsxTestSetup
-end
-
----@param file_path string
----@return boolean
-local function usesNodeTest(file_path)
-  local success, content = pcall(lib.files.read, file_path)
-  if not success then
-    return false
-  end
-
-  -- Check for node:test import
-  return content:match("import.*node:test") or content:match("require%(['\"]node:test['\"]%)")
-end
 
 adapter.root = function(path)
   return lib.files.match_root_pattern("package.json")(path)
 end
 
-function adapter.filter_dir(name, _relpath, _root)
-  return name ~= "node_modules"
-end
+local getCommand = tsx_util.getTsxCommand
 
 ---@param file_path? string
 ---@return boolean
@@ -132,22 +27,55 @@ function adapter.is_test_file(file_path)
   if file_path == nil then
     return false
   end
-  local is_test_file = false
 
-  if string.match(file_path, "__tests__") then
-    is_test_file = true
-  end
+  -- https://nodejs.org/api/test.html#running-tests-from-the-command-line
+  for _, x in ipairs({ "/.*%.test", "/.*-test", "/.*_test", "/test-.*", "/test", "/test/.*/.*" }) do
+    for _, ext in ipairs({ "cjs", "mjs", "js", "ts", "tsx" }) do
+      if string.match(file_path, x .. "%." .. ext .. "$") then
+        local success, content = pcall(lib.files.read, file_path)
 
-  for _, x in ipairs({ "e2e", "spec", "test" }) do
-    for _, ext in ipairs({ "js", "jsx", "coffee", "ts", "tsx" }) do
-      if string.match(file_path, "%." .. x .. "%." .. ext .. "$") then
-        is_test_file = true
-        goto matched_pattern
+        if success then
+          if string.match(content, "node:test") then
+            return true
+          end
+        end
       end
     end
   end
-  ::matched_pattern::
-  return is_test_file and hasTsxTestSetup(file_path)
+  return false
+end
+
+function adapter.filter_dir(name)
+  return name ~= "node_modules"
+end
+
+local function get_match_type(captured_nodes)
+  if captured_nodes["test.name"] then
+    return "test"
+  end
+  if captured_nodes["namespace.name"] then
+    return "namespace"
+  end
+end
+
+-- Enrich `it.each` tests with metadata about TS node position
+function adapter.build_position(file_path, source, captured_nodes)
+  local match_type = get_match_type(captured_nodes)
+  if not match_type then
+    return
+  end
+
+  ---@type string
+  local name = vim.treesitter.get_node_text(captured_nodes[match_type .. ".name"], source)
+  local definition = captured_nodes[match_type .. ".definition"]
+
+  return {
+    type = match_type,
+    path = file_path,
+    name = name,
+    range = { definition:range() },
+    is_parameterized = captured_nodes["each_property"] and true or false,
+  }
 end
 
 ---@async
@@ -155,19 +83,31 @@ end
 function adapter.discover_positions(path)
   local query = [[
     ; -- Namespaces --
-    ; Matches: `describe('context')`
+    ; Matches: `describe('context', () => {})`
     ((call_expression
       function: (identifier) @func_name (#eq? @func_name "describe")
       arguments: (arguments (string (string_fragment) @namespace.name) (arrow_function))
     )) @namespace.definition
-    ; Matches: `describe.only('context')`
+    ; Matches: `describe('context', function() {})`
+    ((call_expression
+      function: (identifier) @func_name (#eq? @func_name "describe")
+      arguments: (arguments (string (string_fragment) @namespace.name) (function_expression))
+    )) @namespace.definition
+    ; Matches: `describe.only('context', () => {})`
     ((call_expression
       function: (member_expression
         object: (identifier) @func_name (#any-of? @func_name "describe")
       )
       arguments: (arguments (string (string_fragment) @namespace.name) (arrow_function))
     )) @namespace.definition
-    ; Matches: `describe.each(['data'])('context')`
+    ; Matches: `describe.only('context', function() {})`
+    ((call_expression
+      function: (member_expression
+        object: (identifier) @func_name (#any-of? @func_name "describe")
+      )
+      arguments: (arguments (string (string_fragment) @namespace.name) (function_expression))
+    )) @namespace.definition
+    ; Matches: `describe.each(['data'])('context', () => {})`
     ((call_expression
       function: (call_expression
         function: (member_expression
@@ -176,74 +116,76 @@ function adapter.discover_positions(path)
       )
       arguments: (arguments (string (string_fragment) @namespace.name) (arrow_function))
     )) @namespace.definition
+    ; Matches: `describe.each(['data'])('context', function() {})`
+    ((call_expression
+      function: (call_expression
+        function: (member_expression
+          object: (identifier) @func_name (#any-of? @func_name "describe")
+        )
+      )
+      arguments: (arguments (string (string_fragment) @namespace.name) (function_expression))
+    )) @namespace.definition
 
     ; -- Tests --
     ; Matches: `test('test') / it('test')`
     ((call_expression
       function: (identifier) @func_name (#any-of? @func_name "it" "test")
-      arguments: (arguments (string (string_fragment) @test.name) (arrow_function))
+      arguments: (arguments (string (string_fragment) @test.name) [(arrow_function) (function_expression)])
     )) @test.definition
     ; Matches: `test.only('test') / it.only('test')`
     ((call_expression
       function: (member_expression
         object: (identifier) @func_name (#any-of? @func_name "test" "it")
       )
-      arguments: (arguments (string (string_fragment) @test.name) (arrow_function))
+      arguments: (arguments (string (string_fragment) @test.name) [(arrow_function) (function_expression)])
     )) @test.definition
     ; Matches: `test.each(['data'])('test') / it.each(['data'])('test')`
     ((call_expression
       function: (call_expression
         function: (member_expression
           object: (identifier) @func_name (#any-of? @func_name "it" "test")
+          property: (property_identifier) @each_property (#eq? @each_property "each")
         )
       )
-      arguments: (arguments (string (string_fragment) @test.name) (arrow_function))
+      arguments: (arguments (string (string_fragment) @test.name) [(arrow_function) (function_expression)])
     )) @test.definition
   ]]
-  query = query .. string.gsub(query, "arrow_function", "function_expression")
-  return lib.treesitter.parse_positions(path, query, { nested_tests = true })
-end
 
----@param path string
----@return string
-local function getTsxCommand(path)
-  local rootPath = util.find_node_modules_ancestor(path)
-  local tsxBinary = util.path.join(rootPath, "node_modules", ".bin", "tsx")
+  local positions = lib.treesitter.parse_positions(path, query, {
+    nested_tests = false,
+    build_position = 'require("neotest-tsx").build_position',
+  })
 
-  if util.path.exists(tsxBinary) then
-    return tsxBinary
+  local parameterized_tests_positions =
+    parameterized_tests.get_parameterized_tests_positions(positions)
+
+  if adapter.tsx_test_discovery and #parameterized_tests_positions > 0 then
+    parameterized_tests.enrich_positions_with_parameterized_tests(
+      positions:data().path,
+      parameterized_tests_positions
+    )
   end
 
-  local gitRootPath = util.find_git_ancestor(path)
-  if gitRootPath then
-    tsxBinary = util.path.join(gitRootPath, "node_modules", ".bin", "tsx")
-    if util.path.exists(tsxBinary) then
-      return tsxBinary
-    end
-  end
-
-  return "tsx"
+  return positions
 end
 
 local function escapeTestPattern(s)
   return (
-    s:gsub("%(", "\\(")
-      :gsub("%)", "\\)")
-      :gsub("%]", "\\]")
-      :gsub("%[", "\\[")
-      :gsub("%.", "\\.")
-      :gsub("%*", "\\*")
-      :gsub("%+", "\\+")
-      :gsub("%-", "\\-")
-      :gsub("%?", "\\?")
-      :gsub(" ", "\\s")
-      :gsub("%$", "\\$")
-      :gsub("%^", "\\^")
-      :gsub("%/", "\\/")
+    s:gsub("%(", "%\\(")
+      :gsub("%)", "%\\)")
+      :gsub("%]", "%\\]")
+      :gsub("%[", "%\\[")
+      :gsub("%*", "%\\*")
+      :gsub("%+", "%\\+")
+      :gsub("%-", "%\\-")
+      :gsub("%?", "%\\?")
+      :gsub("%$", "%\\$")
+      :gsub("%^", "%\\^")
+      :gsub("%'", "%\\'")
   )
 end
 
-local function get_strategy_config(strategy, command, cwd)
+local function get_default_strategy_config(strategy, command, cwd)
   local config = {
     dap = function()
       return {
@@ -254,6 +196,7 @@ local function get_strategy_config(strategy, command, cwd)
         runtimeExecutable = command[1],
         console = "integratedTerminal",
         internalConsoleOptions = "neverOpen",
+        rootPath = "${workspaceFolder}",
         cwd = cwd or "${workspaceFolder}",
       }
     end,
@@ -270,12 +213,17 @@ end
 ---@param path string
 ---@return string|nil
 local function getCwd(path)
-  return util.find_node_modules_ancestor(path)
+  return nil
+end
+
+local function getStrategyConfig(default_strategy_config, args)
+  return default_strategy_config
 end
 
 ---@param args neotest.RunArgs
 ---@return neotest.RunSpec | nil
 function adapter.build_spec(args)
+  local results_path = async.fn.tempname()
   local tree = args.tree
 
   if not tree then
@@ -283,26 +231,58 @@ function adapter.build_spec(args)
   end
 
   local pos = args.tree:data()
-  local binary = args.tsxCommand or getTsxCommand(pos.path)
+  local testNamePattern = nil
+
+  if pos.type == "test" or pos.type == "namespace" then
+    -- pos.id in form "path/to/file::Describe text::test text"
+    local testName = string.sub(pos.id, string.find(pos.id, "::") + 2)
+    testName, _ = string.gsub(testName, "::", " ")
+    testNamePattern = escapeTestPattern(testName)
+    testNamePattern = pos.is_parameterized
+        and parameterized_tests.replaceTestParametersWithRegex(testNamePattern)
+      or testNamePattern
+    testNamePattern = "^" .. testNamePattern
+    if pos.type == "test" then
+      testNamePattern = testNamePattern .. "$"
+    else
+      testNamePattern = testNamePattern .. ""
+    end
+  end
+
+  local binary = args.command or getCommand(pos.path)
   local command = vim.split(binary, "%s+")
+  local reporter = util.get_reporter_path()
 
-  -- For tsx, we run the test file directly
-  -- Node:test will handle test discovery and running
-  vim.list_extend(command, {
-    vim.fs.normalize(pos.path),
-  })
+  local argvs = {
+    "--test-reporter=" .. reporter,
+    "--test-reporter-destination=" .. results_path,
+  }
 
-  vim.list_extend(command, args.extra_args or {})
+  if not testNamePattern then
+    testNamePattern = ".*"
+  end
+  table.insert(argvs, "--test-name-pattern=" .. testNamePattern)
+
+  table.insert(argvs, escapeTestPattern(vim.fs.normalize(pos.path)))
+
+  vim.list_extend(command, argvs)
 
   local cwd = getCwd(pos.path)
+
+  -- creating empty file for streaming results
+  lib.files.write(results_path, "")
 
   return {
     command = command,
     cwd = cwd,
     context = {
+      results_path = results_path,
       file = pos.path,
     },
-    strategy = get_strategy_config(args.strategy, command, cwd),
+    strategy = getStrategyConfig(
+      get_default_strategy_config(args.strategy, command, cwd) or {},
+      args
+    ),
     env = getEnv(args[2] and args[2].env or {}),
   }
 end
@@ -310,10 +290,24 @@ end
 ---@async
 ---@param spec neotest.RunSpec
 ---@return neotest.Result[]
-function adapter.results(spec, b, tree)
-  -- For now, return empty results
-  -- TODO: Parse TAP output from node:test
-  return {}
+function adapter.results(spec)
+  local output_file = spec.context.results_path
+
+  local success, data = pcall(lib.files.read, output_file)
+
+  if not success then
+    logger.error("No test output file found ", output_file)
+    return {}
+  end
+
+  local ok, parsed = pcall(vim.json.decode, data, { luanil = { object = true } })
+
+  if not ok then
+    logger.error("Failed to parse test output json ", output_file)
+    return {}
+  end
+
+  return parsed
 end
 
 local is_callable = function(obj)
@@ -323,14 +317,13 @@ end
 setmetatable(adapter, {
   ---@param opts neotest.TsxOptions
   __call = function(_, opts)
-    if is_callable(opts.tsxCommand) then
-      getTsxCommand = opts.tsxCommand
-    elseif opts.tsxCommand then
-      getTsxCommand = function()
-        return opts.tsxCommand
+    if is_callable(opts.command) then
+      getCommand = opts.command
+    elseif opts.command then
+      getCommand = function()
+        return opts.command
       end
     end
-
     if is_callable(opts.env) then
       getEnv = opts.env
     elseif opts.env then
@@ -338,7 +331,6 @@ setmetatable(adapter, {
         return vim.tbl_extend("force", opts.env, specEnv)
       end
     end
-
     if is_callable(opts.cwd) then
       getCwd = opts.cwd
     elseif opts.cwd then
@@ -346,15 +338,16 @@ setmetatable(adapter, {
         return opts.cwd
       end
     end
-
-    if is_callable(opts.filter_dir) then
-      adapter.filter_dir = opts.filter_dir
+    if is_callable(opts.strategy_config) then
+      getStrategyConfig = opts.strategy_config
+    elseif opts.strategy_config then
+      getStrategyConfig = function()
+        return opts.strategy_config
+      end
     end
 
-    if is_callable(opts.is_test_file) then
-      adapter.is_test_file = function(file_path)
-        return (hasTsxDependency(file_path) or usesNodeTest(file_path)) and opts.is_test_file(file_path)
-      end
+    if opts.tsx_test_discovery then
+      adapter.tsx_test_discovery = true
     end
 
     return adapter

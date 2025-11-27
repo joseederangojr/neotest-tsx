@@ -209,64 +209,14 @@ end
 -- For tsx, we need to handle node:test output format
 -- Node:test outputs TAP format or JSON if configured
 -- For simplicity, we'll assume JSON output similar to vitest
-function M.parsed_json_to_results(data, output_file, consoleOut)
-  local tests = {}
-
-  -- Assuming similar structure to vitest for now
-  -- This may need adjustment based on actual tsx/node:test output
-  for _, testResult in pairs(data.testResults or {}) do
-    local testFn = testResult.name
-
-    for _, assertionResult in pairs(testResult.assertionResults or {}) do
-      local status, name = assertionResult.status, assertionResult.title
-
-      if name == nil then
-        logger.error("Failed to find parsed test result ", assertionResult)
-        return {}
-      end
-
-      local keyid = testFn
-
-      for _, value in ipairs(assertionResult.ancestorTitles or {}) do
-        if value ~= "" then
-          keyid = keyid .. "::" .. value
-        end
-      end
-
-      keyid = keyid .. "::" .. name
-
-      if status == "pending" or status == "todo" then
-        status = "skipped"
-      end
-
-      tests[keyid] = {
-        status = status,
-        short = name .. ": " .. status,
-        output = consoleOut,
-        location = assertionResult.location,
-      }
-
-      if assertionResult.failureMessages and not vim.tbl_isempty(assertionResult.failureMessages) then
-        local errors = {}
-
-        for i, failMessage in ipairs(assertionResult.failureMessages) do
-          local msg = M.cleanAnsi(failMessage)
-
-          errors[i] = {
-            line = (assertionResult.location and assertionResult.location.line - 1 or nil),
-            column = (assertionResult.location and assertionResult.location.column or nil),
-            message = msg,
-          }
-
-          tests[keyid].short = tests[keyid].short .. "\n" .. msg
-        end
-
-        tests[keyid].errors = errors
-      end
-    end
+function M.get_reporter_path()
+  local cwd = vim.fn.getcwd()
+  local path = cwd .. "/lua/javascript/neotest-reporter.mjs"
+  if vim.fn.filereadable(path) == 1 then
+    return path
   end
 
-  return tests
+  error("reporter not found")
 end
 
 return M

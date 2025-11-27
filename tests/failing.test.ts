@@ -1,12 +1,13 @@
-import { describe, it } from 'node:test';
-import assert from 'node:assert';
+import { test, describe } from "node:test";
+import assert from "node:assert";
 
-describe('Failing Tests', () => {
-  it('should fail intentionally', () => {
-    assert.strictEqual(2 + 2, 5, 'This test is designed to fail');
+describe("Failing Tests", () => {
+  test("should pass", () => {
+    assert.equal(2 + 2, 4);
   });
 
-  it('should pass', () => {
-    assert.ok(true);
+  test("should fail", () => {
+    assert.equal(2 + 2, 5);
   });
 });
+

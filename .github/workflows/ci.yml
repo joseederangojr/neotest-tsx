@@ -2,35 +2,55 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
+      - uses: pnpm/action-setup@v4
+        name: Install pnpm
+        with:
+          version: 10
+          run_install: false
 
-    - name: Install dependencies
-      run: npm ci
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "25"
+          cache: "pnpm"
 
-    - name: Run TypeScript tests
-      run: npm test
+      - name: Install dependencies
+        run: pnpm install
 
-    - name: Run Lua tests
-      run: |
-        lua test_limited.lua
-        lua test_basic.lua
-        lua test_interface.lua
-        lua test_comprehensive.lua
-        lua test_edge_cases.lua
-        lua test_tsx_requirement.lua
-        lua test_final.lua
+      - name: Run TypeScript tests
+        run: pnpm test
+
+      - uses: leafo/gh-actions-lua@v12
+
+      - name: Run Lua tests
+        run: |
+          lua test_limited.lua
+          lua test_basic.lua
+          lua test_interface.lua
+          lua test_comprehensive.lua
+          lua test_edge_cases.lua
+          lua test_tsx_requirement.lua
+          lua test_final.lua
+
+      - name: Setup neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim_version }}
+
+      - name: Run tests
+        run: |
+          nvim --version
+          ./scripts/test
+

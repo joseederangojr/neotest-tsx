@@ -4,7 +4,7 @@
   "description": "Test files for neotest-tsx adapter",
   "type": "module",
   "scripts": {
-    "test": "tsx --test",
+    "test": "tsx --test --test-skip-pattern='Failing Tests'",
     "test:watch": "tsx --test --watch"
   },
   "devDependencies": {
@@ -12,3 +12,4 @@
     "tsx": "^4.0.0"
   }
 }
+

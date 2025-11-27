@@ -1,0 +1,27 @@
+local s = require("say")
+
+function Contains(state, arguments)
+  if not type(arguments[1]) == "table" or #arguments ~= 2 then
+    return false
+  end
+
+  for _, val in ipairs(arguments[1]) do
+    if type(val) == "string" and val:find(arguments[2], 1, true) then
+      return true
+    elseif val == arguments[2] then
+      return true
+    end
+  end
+
+  return false
+end
+
+s:set("assertion.Contains.positive", "Expected %s \nto contain: %s")
+s:set("assertion.Contains.negative", "Expected %s \nto not contain: %s")
+assert:register(
+  "assertion",
+  "Contains",
+  Contains,
+  "assertion.Contains.positive",
+  "assertion.Contains.negative"
+)
