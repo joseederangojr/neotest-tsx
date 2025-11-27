@@ -20,7 +20,7 @@ class NeotestReporter {
   }
 
   handleEvent(event) {
-    event.data.depth = event.data.nesting; 
+    event.data.depth = event.data.nesting;
     delete event.data.nesting;
     if (event.data?.testNumber) {
       event.data.testNumber = parseInt(event.data.testNumber)
@@ -29,18 +29,22 @@ class NeotestReporter {
       delete event.data.details
     };
 
-    switch (true) {
-      case (event.data?.skip !== undefined): event.data.status = "skipped"; break;
-      case (event.data?.todo !== undefined): event.data.status = "todo"; break;
-      default: event.data.status = `${event.type.replace(`test:`, ``)}ed`;
-    }
-
     switch (event.type) {
+      case 'describe:start':
+        this.add(event.data);
+        break;
       case 'test:start':
+        event.data.type = event.type;
         this.add(event.data);
         break;
       case 'test:pass':
       case 'test:fail':
+        event.data.type = event.type;
+        switch (true) {
+          case (event.data?.skip !== undefined): event.data.status = "skipped"; break;
+          case (event.data?.todo !== undefined): event.data.status = "todo"; break;
+          default: event.data.status = `${event.type.replace(`test:`, ``)}ed`;
+        }
         if (event.data?.details?.error) {
           event.data.error = JSON.parse(JSON.stringify(event.data.details.error));	// These values are not copyable: [stack], cause.[stack] cause.[message] cause.[name], [message]
           event.data.error.stack = event.data.details.error.stack;
@@ -72,15 +76,20 @@ class NeotestReporter {
   toNeoTestRetuls() {
     const tests = {};
     const dfs = (node, namespace) => {
-      const id = [...namespace, node.name].join("::");
-      tests[id] = {
-        status: node.status,
-        short: `${node.name}: ${node.status}`,
-        location: {
-          line: node.line,
-          column: node.column,
+      if (node.status && (!node.children || node.children.length === 0)) {
+        const id = [...namespace, node.name].join("::");
+        tests[id] = {
+          status: node.status,
+          short: `${node.name}: ${node.status}`,
+          location: {
+            line: node.line,
+            column: node.column,
+          }
+        };
+        if (node.error) {
+          tests[id].errors = [node.error];
         }
-      };
+      }
       if (node.children && node.children.length > 0) {
         node.children.forEach(child => dfs(child, [...namespace, node.name]));
       }

@@ -289,7 +289,7 @@ end
 
 ---@async
 ---@param spec neotest.RunSpec
----@return neotest.Result[]
+---@return table<string, neotest.Result>
 function adapter.results(spec)
   local output_file = spec.context.results_path
 
