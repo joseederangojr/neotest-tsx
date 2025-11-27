@@ -214,7 +214,7 @@ function M.get_reporter_path()
   local lua_dir = vim.fn.fnamemodify(current_file, ':h:h')
   local path = lua_dir .. '/javascript/neotest-reporter.mjs'
   if vim.fn.filereadable(path) == 1 then
-    return path
+    return "file://" .. path
   end
 
   error("reporter not found")

@@ -211,9 +211,9 @@ local function getEnv(specEnv)
 end
 
 ---@param path string
----@return string|nil
+---@return string
 local function getCwd(path)
-  return nil
+  return util.find_git_ancestor(path)
 end
 
 local function getStrategyConfig(default_strategy_config, args)
@@ -248,7 +248,6 @@ function adapter.build_spec(args)
       testNamePattern = testNamePattern .. ""
     end
   end
-
   local binary = args.command or getCommand(pos.path)
   local command = vim.split(binary, "%s+")
   local reporter = util.get_reporter_path()
@@ -263,7 +262,8 @@ function adapter.build_spec(args)
   end
   table.insert(argvs, "--test-name-pattern=" .. testNamePattern)
 
-  table.insert(argvs, escapeTestPattern(vim.fs.normalize(pos.path)))
+   local normalized_path = vim.fs.normalize(pos.path):gsub('\\', '/')
+   table.insert(argvs, vim.fn.fnamemodify(normalized_path, ':.'))
 
   vim.list_extend(command, argvs)
 
