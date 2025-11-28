@@ -1,5 +1,7 @@
 # neotest-tsx
 
+[![CI](https://github.com/joseederangojr/neotest-tsx/actions/workflows/ci.yml/badge.svg)](https://github.com/joseederangojr/neotest-tsx/actions/workflows/ci.yml)
+
 ## Disclaimer
 
 This is vibe coded and works on my specific use case.
