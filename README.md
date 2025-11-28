@@ -6,7 +6,7 @@ This is vibe coded and works on my specific use case.
 
 This plugin provides a [tsx](https://github.com/privatenumber/tsx) adapter for the [Neotest](https://github.com/nvim-neotest/neotest) framework.
 
-Credits to [neotest-vitest](https://github.com/marilari88/neotest-vitest)
+Credits to [neotest-vitest](https://github.com/marilari88/neotest-vitest) and [neotest-node](https://github.com/yesmeck/neotest-node)
 
 ## Requirements
 
